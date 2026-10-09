@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mindcare
+      POSTGRES_PASSWORD: mindcare
+      POSTGRES_DB: mindcare
+    volumes:
+      - mindcare_pg_data:/var/lib/postgresql/data
+
+volumes:
+  mindcare_pg_data:

@@ -1,0 +1,353 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. ENUMS
+
+enum UserRole {
+  STUDENT
+  COUNSELLOR
+  ADMIN
+  GUARDIAN
+}
+
+enum AccountStatus {
+  PENDING_CONSENT
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum ConsentType {
+  PARENTAL_CONSENT
+  CHILD_ASSENT
+  AI_DISCLOSURE
+  PRIVACY_POLICY
+  JOURNAL_SHARING
+  REFERRAL_CONSENT
+}
+
+enum ConsentStatus {
+  GRANTED
+  REVOKED
+  EXPIRED
+}
+
+enum SafetyAction {
+  ALLOWED
+  MODIFIED
+  BLOCKED
+  REDIRECTED
+  REFERRED
+  CRISIS_INTERCEPTED
+}
+
+enum PlanStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  SUPERSEDED
+}
+
+enum ReferralStatus {
+  PENDING
+  ACCEPTED
+  IN_REVIEW
+  CLOSED
+}
+
+enum AuditEventType {
+  AUTH
+  DATA_ACCESS
+  CONSENT_CHANGE
+  SAFETY_OVERRIDE
+  SYSTEM_ERROR
+}
+
+enum MessageRole {
+  USER
+  AI
+  SYSTEM
+}
+
+// 2. MODELS & RELATIONS
+
+model User {
+  id             String        @id @default(cuid())
+  name           String?
+  email          String        @unique
+  emailVerified  DateTime?
+  hashedPassword String?
+  role           UserRole
+  status         AccountStatus
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  consentRecords    ConsentRecord[]
+  moodCheckIns      MoodCheckIn[]
+  journalEntries    JournalEntry[]
+  chatConversations ChatConversation[]
+
+  studentGuardians           GuardianLink[]      @relation("StudentLink")
+  guardianStudents           GuardianLink[]      @relation("GuardianLink")
+  journalShareGrantsReceived JournalShareGrant[] @relation("GrantedToUser")
+  journalShareGrantsGiven    JournalShareGrant[] @relation("GrantedByUser")
+  referralsStudent           Referral[]          @relation("ReferralStudent")
+  referralsAssigned          Referral[]          @relation("ReferralAssigned")
+  interventionsApproved      InterventionPlan[]  @relation("ApprovedBy")
+  auditLogs                  AuditLog[]
+  safetyEvents               SafetyEvent[]
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model GuardianLink {
+  id           String    @id @default(cuid())
+  studentId    String
+  guardianId   String
+  relationship String
+  verifiedAt   DateTime?
+
+  student  User @relation("StudentLink", fields: [studentId], references: [id])
+  guardian User @relation("GuardianLink", fields: [guardianId], references: [id])
+
+  @@index([studentId])
+  @@index([guardianId])
+  @@map("guardian_links")
+}
+
+model ConsentRecord {
+  id        String        @id @default(cuid())
+  userId    String
+  type      ConsentType
+  status    ConsentStatus
+  version   String
+  ipAddress String
+  userAgent String
+  timestamp DateTime      @default(now())
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([timestamp])
+  @@map("consent_records")
+}
+
+model MoodCheckIn {
+  id        String   @id @default(cuid())
+  userId    String
+  mood      Int // 1-5
+  stress    Int?
+  energy    Int?
+  sleep     Int?
+  freeText  String?  @db.Text
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("mood_check_ins")
+}
+
+model JournalEntry {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  content   String    @db.Text
+  moodTag   String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  user   User                @relation(fields: [userId], references: [id])
+  shares JournalShareGrant[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([deletedAt])
+  @@map("journal_entries")
+}
+
+model JournalShareGrant {
+  id             String    @id @default(cuid())
+  journalEntryId String
+  grantedToId    String
+  grantedById    String
+  expiresAt      DateTime?
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id])
+  grantedTo    User         @relation("GrantedToUser", fields: [grantedToId], references: [id])
+  grantedBy    User         @relation("GrantedByUser", fields: [grantedById], references: [id])
+
+  @@index([journalEntryId])
+  @@index([grantedToId])
+  @@index([grantedById])
+  @@index([expiresAt])
+  @@map("journal_share_grants")
+}
+
+model ChatConversation {
+  id              String   @id @default(cuid())
+  userId          String
+  createdAt       DateTime @default(now())
+  retentionStatus String
+
+  user         User          @relation(fields: [userId], references: [id])
+  messages     ChatMessage[]
+  safetyEvents SafetyEvent[]
+
+  @@index([userId])
+  @@index([createdAt])
+  @@map("chat_conversations")
+}
+
+model ChatMessage {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String      @db.Text
+  timestamp      DateTime    @default(now())
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id])
+  safetyEvents SafetyEvent[]
+
+  @@index([conversationId])
+  @@index([timestamp])
+  @@map("chat_messages")
+}
+
+model SafetyEvent {
+  id                String       @id @default(cuid())
+  messageId         String
+  userId            String?
+  conversationId    String?
+  category          String
+  confidence        Float
+  signals           Json         @db.JsonB
+  rationale         String       @db.Text
+  action            SafetyAction
+  policyVersion     String
+  modelVersion      String
+  rawInputHash      String
+  outputHash        String?
+  timestamp         DateTime     @default(now())
+  previousEventHash String?
+
+  message      ChatMessage       @relation(fields: [messageId], references: [id], onDelete: Restrict)
+  user         User?             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  conversation ChatConversation? @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+
+  @@index([messageId])
+  @@index([userId])
+  @@index([conversationId])
+  @@index([timestamp])
+  @@index([action])
+  @@map("safety_events")
+}
+
+model Referral {
+  id                   String         @id @default(cuid())
+  studentId            String
+  reason               String         @db.Text
+  source               String
+  evidence             Json           @db.JsonB
+  uncertainty          Float?
+  status               ReferralStatus
+  assignedCounsellorId String?
+  createdAt            DateTime       @default(now())
+
+  student            User             @relation("ReferralStudent", fields: [studentId], references: [id])
+  assignedCounsellor User?            @relation("ReferralAssigned", fields: [assignedCounsellorId], references: [id])
+  counsellorCases    CounsellorCase[]
+
+  @@index([studentId])
+  @@index([assignedCounsellorId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("referrals")
+}
+
+model CounsellorCase {
+  id          String    @id @default(cuid())
+  referralId  String
+  accessScope Json      @db.JsonB
+  status      String
+  reviewDate  DateTime?
+
+  referral          Referral           @relation(fields: [referralId], references: [id])
+  interventionPlans InterventionPlan[]
+  followUps         FollowUp[]
+
+  @@index([referralId])
+  @@index([status])
+  @@map("counsellor_cases")
+}
+
+model InterventionPlan {
+  id                   String     @id @default(cuid())
+  caseId               String
+  goals                Json       @db.JsonB
+  responseStyle        String
+  copingStrategies     Json       @db.JsonB
+  topicsRequiringCare  String     @db.Text
+  referralInstructions String     @db.Text
+  reviewSchedule       String
+  version              Int
+  status               PlanStatus
+  approvedById         String?
+  createdAt            DateTime   @default(now())
+
+  case       CounsellorCase @relation(fields: [caseId], references: [id])
+  approvedBy User?          @relation("ApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([caseId])
+  @@index([status])
+  @@index([approvedById])
+  @@map("intervention_plans")
+}
+
+model AuditLog {
+  id           String         @id @default(cuid())
+  actorId      String
+  eventType    AuditEventType
+  targetId     String
+  targetType   String
+  details      Json           @db.JsonB
+  timestamp    DateTime       @default(now())
+  previousHash String?
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId])
+  @@index([eventType])
+  @@index([targetId, targetType])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+model FollowUp {
+  id               String   @id @default(cuid())
+  caseId           String
+  counsellorId     String
+  dueDate          DateTime
+  completionStatus String
+  notes            String   @db.Text
+
+  case CounsellorCase @relation(fields: [caseId], references: [id])
+
+  @@index([caseId])
+  @@index([counsellorId])
+  @@index([dueDate])
+  @@map("follow_ups")
+}
